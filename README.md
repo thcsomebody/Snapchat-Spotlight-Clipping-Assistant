@@ -1,7 +1,5 @@
 # Snapchat-Spotlight-Clipping-Assistant
 
-This n8n automation workflow creates a comprehensive Snapchat Spotlight content creation and distribution system that performs TikTok market research, generates AI-powered ads and branding, and distributes content via Gmail and Reddit.
-
 This workflow creates a fully automated Snapchat Spotlight content creation and distribution system that leverages trending TikTok data, AI-generated visuals, and multi-platform distribution for maximum reach and engagement.
 
  Key Features of This Workflow:
