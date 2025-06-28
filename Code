@@ -1,0 +1,320 @@
+{
+  "node_type": "Schedule Trigger",
+  "cron": "0 8 * * *",
+  "description": "Daily trigger at 8 AM for market research"
+}
+
+{
+  "node_type": "HTTP Request",
+  "method": "GET",
+  "url": "https://api.tiktok.com/research/trending",
+  "headers": {
+    "Authorization": "Bearer {{$node[\"TikTok_API_Key\"].json[\"api_key\"]}}",
+    "Content-Type": "application/json"
+  },
+  "parameters": {
+    "category": "entertainment",
+    "region": "US",
+    "count": 50
+  }
+}
+{
+  "node_type": "Function",
+  "functionCode": `
+    const trendingData = $input.all();
+    const keywords = [];
+    const contentThemes = [];
+    
+    trendingData.forEach(item => {
+      // Extract trending hashtags
+      const hashtags = item.json.desc.match(/#[a-zA-Z0-9_]+/g) || [];
+      keywords.push(...hashtags);
+      
+      // Analyze content themes
+      const theme = {
+        category: item.json.category,
+        engagement: item.json.stats.playCount,
+        duration: item.json.duration,
+        trend_score: item.json.stats.shareCount / item.json.stats.playCount
+      };
+      contentThemes.push(theme);
+    });
+    
+    return [{
+      json: {
+        trending_keywords: [...new Set(keywords)].slice(0, 20),
+        content_themes: contentThemes.sort((a, b) => b.trend_score - a.trend_score).slice(0, 10),
+        analysis_date: new Date().toISOString()
+      }
+    }];
+  `
+}
+
+{
+  "node_type": "OpenAI",
+  "operation": "text",
+  "model": "gpt-4",
+  "prompt": `
+    Based on these trending TikTok themes: {{$node["Content Analysis"].json["content_themes"]}}
+    And keywords: {{$node["Content Analysis"].json["trending_keywords"]}}
+
+{
+  "node_type": "HTTP Request",
+  "method": "POST",
+  "url": "https://api.openai.com/v1/images/generations",
+  "headers": {
+    "Authorization": "Bearer {{$node[\"OpenAI_API_Key\"].json[\"api_key\"]}}",
+    "Content-Type": "application/json"
+  },
+  "body": {
+    "model": "dall-e-3",
+    "prompt": "{{$node[\"AI Image Prompt Generator\"].json[\"choices\"][0][\"message\"][\"content\"]}}",
+    "n": 4,
+    "size": "1024x1024",
+    "quality": "hd",
+    "style": "vivid"
+  }
+}
+{
+  "node_type": "HTTP Request",
+  "method": "POST",
+  "url": "https://api.midjourney.com/v1/imagine",
+  "headers": {
+    "Authorization": "Bearer {{$node[\"Midjourney_API_Key\"].json[\"api_key\"]}}",
+    "Content-Type": "application/json"
+  },
+  "body": {
+    "prompt": "{{$node[\"AI Image Prompt Generator\"].json[\"processed_prompt\"]}} --ar 9:16 --style raw --v 6",
+    "quality": "high"
+  }
+}
+{
+  "node_type": "Function",
+  "functionCode": `
+    const Canvas = require('canvas');
+    const { createCanvas, loadImage } = Canvas;
+    
+    async function addBranding(imageUrl, brandingConfig) {
+      const canvas = createCanvas(1024, 1024);
+      const ctx = canvas.getContext('2d');
+      
+      // Load base image
+      const baseImage = await loadImage(imageUrl);
+      ctx.drawImage(baseImage, 0, 0, 1024, 1024);
+      
+      // Add branding elements
+      ctx.fillStyle = brandingConfig.color || '#FF0000';
+      ctx.font = 'bold 48px Arial';
+      ctx.fillText(brandingConfig.watermark || 'Your Brand', 50, 970);
+      
+      // Add logo if provided
+      if (brandingConfig.logoUrl) {
+        const logo = await loadImage(brandingConfig.logoUrl);
+        ctx.drawImage(logo, 874, 874, 100, 100);
+      }
+      
+      return canvas.toDataURL();
+    }
+    
+    const images = $input.all();
+    const brandedImages = [];
+    
+    for (let item of images) {
+      const brandedImage = await addBranding(item.json.url, {
+        watermark: 'SnapSpot Pro',
+        color: '#FFFC00',
+        logoUrl: $node["Brand_Config"].json["logo_url"]
+      });
+      
+      brandedImages.push({
+        json: {
+          original_url: item.json.url,
+          branded_image: brandedImage,
+          timestamp: new Date().toISOString()
+        }
+      });
+    }
+{
+  "node_type": "OpenAI",
+  "operation": "text",
+  "model": "gpt-4",
+  "prompt": `
+    Create engaging Snapchat Spotlight captions for these generated images.
+    
+    Trending Keywords: {{$node["Content Analysis"].json["trending_keywords"]}}
+    Content Themes: {{$node["Content Analysis"].json["content_themes"]}}
+{
+  "node_type": "Gmail",
+  "operation": "send",
+  "authentication": "oauth2",
+  "resource": "message"
+}
+
+{
+  "node_type": "Google Sheets",
+  "operation": "read",
+  "documentId": "{{$node[\"Config\"].json[\"email_list_sheet_id\"]}}",
+  "range": "A:C",
+  "description": "Read email list with Name, Email, Segment columns"
+}
+{
+  "node_type": "Function",
+  "functionCode": `
+    const emailList = $node["Email List Processor"].json["values"];
+    const generatedContent = $node["AI Image Generator"].json;
+    const captions = $node["Caption Generator"].json;
+    
+    const personalizedEmails = [];
+    
+    emailList.forEach((contact, index) => {
+      if (index === 0) return; // Skip header row
+      
+      const [name, email, segment] = contact;
+      const contentIndex = index % generatedContent.data.length;
+      const captionIndex = index % 3; // 3 caption variations
+      
+      const emailContent = {
+        to: email,
+        subject: \`🔥 Fresh Snapchat Content Ready - \${name}!\`,
+        html: \`
+          <h2>Hey \${name}! 👋</h2>
+          <p>Your daily Snapchat Spotlight content is ready!</p>
+          
+          <div style="text-align: center; margin: 20px 0;">
+            <img src="\${generatedContent.data[contentIndex].url}" 
+                 style="max-width: 300px; border-radius: 10px;" 
+                 alt="Generated Content">
+          </div>
+          
+          <h3>Suggested Caption:</h3>
+          <p style="background: #f0f0f0; padding: 10px; border-radius: 5px;">
+            \${captions.choices[captionIndex].message.content}
+          </p>
+          
+          <h3>Trending Keywords:</h3>
+          <p>\${$node["Content Analysis"].json["trending_keywords"].slice(0, 10).join(', ')}</p>
+          
+          <p><strong>Segment:</strong> \${segment}</p>
+          <p><em>Generated on: \${new Date().toLocaleDateString()}</em></p>
+          
+          <div style="margin-top: 30px; text-align: center;">
+            <a href="#" style="background: #FFFC00; color: black; padding: 10px 20px; text-decoration: none; border-radius: 5px;">
+              Download Content Package
+            </a>
+          </div>
+        \`
+      };
+      
+      personalizedEmails.push({ json: emailContent });
+    });
+    
+    return personalizedEmails;
+  `
+}
+{
+  "node_type": "HTTP Request",
+  "method": "POST",
+  "url": "https://www.reddit.com/api/v1/access_token",
+  "headers": {
+    "Authorization": "Basic {{$node[\"Reddit_Credentials\"].json[\"encoded_credentials\"]}}",
+    "Content-Type": "application/x-www-form-urlencoded"
+  },
+  "body": "grant_type=client_credentials"
+}
+{
+  "node_type": "HTTP Request",
+  "method": "POST",
+  "url": "https://oauth.reddit.com/api/submit",
+  "headers": {
+    "Authorization": "Bearer {{$node[\"Reddit API Authentication\"].json[\"access_token\"]}}",
+    "Content-Type": "application/x-www-form-urlencoded",
+    "User-Agent": "SnapchatSpotlightBot/1.0"
+  },
+  "body": {
+    "sr": "snapchat",
+    "kind": "image",
+    "title": "🔥 New Snapchat Spotlight Content Trend Alert!",
+    "url": "{{$node[\"AI Image Generator\"].json[\"data\"][0][\"url\"]}}",
+    "text": "{{$node[\"Caption Generator\"].json[\"choices\"][0][\"message\"][\"content\"]}}\n\nTrending keywords: {{$node[\"Content Analysis\"].json[\"trending_keywords\"].slice(0, 5).join(', ')}}"
+  }
+}
+
+{
+  "node_type": "HTTP Request",
+  "method": "POST",
+  "url": "https://oauth.reddit.com/api/compose",
+  "headers": {
+    "Authorization": "Bearer {{$node[\"Reddit API Authentication\"].json[\"access_token\"]}}",
+    "Content-Type": "application/x-www-form-urlencoded"
+  },
+  "body": {
+    "to": "{{$node[\"Reddit_User_List\"].json[\"username\"]}}",
+    "subject": "Fresh Snapchat Content Alert! 🚀",
+    "text": "Hey! Just generated some fresh Snapchat Spotlight content based on today's TikTok trends. Check it out: {{$node[\"AI Image Generator\"].json[\"data\"][0][\"url\"]}}"
+  }
+}
+{
+  "node_type": "Function",
+  "functionCode": `
+    const workflowData = {
+      execution_id: $executionId,
+      timestamp: new Date().toISOString(),
+      tiktok_trends_analyzed: $node["Content Analysis"].json["content_themes"].length,
+      images_generated: $node["AI Image Generator"].json["data"].length,
+      emails_sent: $node["Personalized Email Generator"].json.length,
+      reddit_posts: 1,
+      trending_keywords: $node["Content Analysis"].json["trending_keywords"].slice(0, 10),
+      success_rate: 1.0
+    };
+    
+    return [{ json: workflowData }];
+  
+}
+{
+  "node_type": "Google Sheets",
+  "operation": "append",
+  "documentId": "{{$node[\"Config\"].json[\"analytics_sheet_id\"]}}",
+  "range": "Analytics!A:H",
+  "values": [
+    [
+      "{{$node[\"Analytics Collector\"].json[\"timestamp\"]}}",
+      "{{$node[\"Analytics Collector\"].json[\"tiktok_trends_analyzed\"]}}",
+      "{{$node[\"Analytics Collector\"].json[\"images_generated\"]}}",
+      "{{$node[\"Analytics Collector\"].json[\"emails_sent\"]}}",
+      "{{$node[\"Analytics Collector\"].json[\"reddit_posts\"]}}",
+      "{{$node[\"Analytics Collector\"].json[\"trending_keywords\"].join(', ')}}",
+      "{{$node[\"Analytics Collector\"].json[\"success_rate\"]}}",
+      "{{$node[\"Analytics Collector\"].json[\"execution_id\"]}}"
+    ]
+  ]
+}
+{
+  "TIKTOK_API_KEY": "your_tiktok_api_key",
+  "OPENAI_API_KEY": "your_openai_api_key",
+  "MIDJOURNEY_API_KEY": "your_midjourney_api_key",
+  "GMAIL_CLIENT_ID": "your_gmail_client_id",
+  "GMAIL_CLIENT_SECRET": "your_gmail_client_secret",
+  "REDDIT_CLIENT_ID": "your_reddit_client_id",
+  "REDDIT_CLIENT_SECRET": "your_reddit_client_secret",
+  "REDDIT_USERNAME": "your_reddit_username",
+  "REDDIT_PASSWORD": "your_reddit_password"
+}
+{
+  "node_type": "Function",  
+  "description": "Filter generated content based on quality metrics",
+  "functionCode": "// AI-powered content scoring and filtering logic"
+}
+{
+  "node_type": "Function",
+  "description": "Split test different content variations",
+  "functionCode": "// A/B testing logic for optimal engagement"
+}
+
+{
+  "node_type": "Function",
+  "description": "Ensure content meets platform guidelines",
+  "functionCode": "// Content moderation and compliance verification"
+}
+
+
+    
